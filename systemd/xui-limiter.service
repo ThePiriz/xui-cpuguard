@@ -1,0 +1,41 @@
+[Unit]
+Description=3x-ui Advanced Client Limiter
+Documentation=https://github.com/MHSanaei/3x-ui
+After=network-online.target x-ui.service
+Wants=network-online.target
+# We do NOT use Requires=x-ui.service - the limiter can keep running if x-ui
+# restarts; it'll just queue up actions until x-ui is back.
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/xui-limiter
+ExecStart=/opt/xui-limiter/venv/bin/python /opt/xui-limiter/xui_limiter.py --config /etc/xui-limiter/config.yaml
+Restart=on-failure
+RestartSec=10s
+KillSignal=SIGTERM
+TimeoutStopSec=20s
+
+# We need to:
+#   - read/write /etc/x-ui/x-ui.db
+#   - read /usr/local/x-ui/bin/access.log
+#   - run `systemctl restart x-ui`
+#   - write /var/log/xui-limiter.log
+# So we run as root. Hardening below limits the blast radius.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/etc/x-ui /var/log /etc/xui-limiter
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+LockPersonality=true
+
+# Resource caps so a runaway limiter can't DoS the box that x-ui is on
+MemoryMax=256M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

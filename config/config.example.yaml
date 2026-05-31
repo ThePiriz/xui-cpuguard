@@ -1,0 +1,152 @@
+# =============================================================================
+# xui-limiter configuration
+# =============================================================================
+#
+# Copy this file to /etc/xui-limiter/config.yaml and edit values for your setup.
+# The installer (install.sh) does this for you on first install.
+#
+# Two enforcement modes run independently:
+#   ip_limit       - kills clients whose config is being shared with many people
+#   traffic_limit  - kills clients hitting unrealistic bandwidth (torrents / botnet)
+#
+# When a client is "limited" we DO NOT delete it - we rename, disable, rotate
+# its credential, and leave the row in place so traffic counters survive and
+# external tools that reference the email still find a record.
+
+# ---- 3x-ui database -----------------------------------------------------------
+database_path: /etc/x-ui/x-ui.db
+
+# ---- IP-based limiting (sharing detection) -----------------------------------
+ip_limit:
+  enabled: true
+
+  # Max unique source IPs allowed per client at the same time.
+  max_ips: 5
+
+  # Look-back window when counting unique IPs (seconds). Larger = more sensitive
+  # to short bursts, but more memory and more chance of false positives from
+  # roaming mobile clients (Wi-Fi <-> LTE).
+  window_seconds: 60
+
+  # An email must stay over the limit for this many seconds before action.
+  # Protects against transient roaming or NAT/CGN cases. 20s is a good balance.
+  sustain_seconds: 20
+
+  # Suffix appended to email when limited.
+  suffix: "-iplimited"
+
+  # Xray access log path. For 3x-ui you MUST enable an access log so this works.
+  # In the panel: Xray Configurations -> Log -> Access Log
+  # 3x-ui's default value "./access.log" resolves to /usr/local/x-ui/access.log
+  # because xray runs with cwd = /usr/local/x-ui (NOT /usr/local/x-ui/bin).
+  access_log: /usr/local/x-ui/access.log
+
+# ---- Traffic-based limiting (abuse / torrent detection) ----------------------
+traffic_limit:
+  enabled: true
+
+  # How often to snapshot client_traffics from the DB (seconds).
+  # 3x-ui flushes xray stats to DB every ~10s, so going below 10s is wasted work.
+  snapshot_interval_seconds: 10
+
+  # Window we compare against: current usage vs. usage N seconds ago.
+  comparison_window_seconds: 300   # 5 minutes
+
+  # Trigger threshold over the window. A normal heavy user does maybe 500MB-1GB
+  # in 5 minutes (HD streaming). 5GB/5min sustained is unrealistic for one human
+  # and almost always means torrents / shared config / botnet.
+  #   5 GB  = 5368709120
+  #   3 GB  = 3221225472
+  #   10 GB = 10737418240
+  threshold_bytes: 5368709120
+
+  # Suffix appended to email when limited.
+  suffix: "-trafficlimited"
+
+# ---- Whitelist (skip these from BOTH limits) ---------------------------------
+whitelist:
+  # Anything starting with these prefixes is exempt. Default is "vip-" so you
+  # can promote a client to unlimited by renaming it `vip-customername` in the
+  # 3x-ui panel.
+  name_prefixes:
+    - "vip-"
+
+  # Exact email matches that are exempt.
+  emails: []
+
+  # Don't re-limit clients that are already limited (default suffixes).
+  suffix_blocklist:
+    - "-iplimited"
+    - "-trafficlimited"
+
+# ---- Webhook (push notifications when a client is limited) -------------------
+# Each event is POSTed as JSON. Example payload:
+# {
+#   "id": "evt_1717000000000_abc12345",
+#   "timestamp": "2026-05-28T10:30:00+00:00",
+#   "type": "ip_limit",
+#   "email_original": "ali",
+#   "email_new": "ali-iplimited",
+#   "inbound_id": 5,
+#   "protocol": "vless",
+#   "credential_field": "id",
+#   "credential_old_masked": "abcd...wxyz",
+#   "credential_new_masked": "1234...5678",
+#   "reason": "Exceeded 5 concurrent IPs (...)",
+#   "details": { "ip_count": 47, "ips_sample": ["...", "..."], ... }
+# }
+webhook:
+  enabled: false
+  url: "https://example.com/your-bot-webhook"
+  timeout_seconds: 5
+  retries: 3
+  # Extra headers (e.g. {"X-Token": "..."}) attached to every webhook POST.
+  headers: {}
+
+# ---- Telegram (push notifications via a bot to a chat / group / channel) -----
+# Get bot_token from @BotFather on Telegram.
+# For chat_id:
+#   - private chat:    your Telegram numeric user id
+#   - group:           negative number, e.g. -1234567890
+#   - supergroup:      starts with -100, e.g. -1001234567890
+#   - channel:         add the bot as admin, use channel id
+# message_thread_id is only for forum-style supergroups; leave empty otherwise.
+telegram:
+  enabled: false
+  bot_token: ""
+  chat_id: ""
+  message_thread_id: ""
+  timeout_seconds: 10
+  retries: 3
+  parse_mode: HTML
+
+# ---- HTTP API (read-only event log, useful for debugging & polling) ----------
+# Endpoints:
+#   GET /healthz                  - no auth, liveness probe
+#   GET /events                   - all events in the in-memory buffer
+#   GET /events?since=<event_id>  - events after the given id (long-poll style)
+# Send "Authorization: Bearer <token>" header for /events.
+api:
+  enabled: true
+  host: 127.0.0.1
+  port: 9999
+  token: "CHANGE_ME_TO_A_RANDOM_LONG_STRING"
+  retention_events: 500
+
+# ---- Restart strategy --------------------------------------------------------
+# After applying limits we restart x-ui so xray reloads its config and drops
+# the abuser. Limits within `debounce_seconds` are batched into one restart.
+restart:
+  debounce_seconds: 5
+  service: x-ui
+  command:
+    - systemctl
+    - restart
+    - x-ui
+
+# ---- Logging -----------------------------------------------------------------
+logging:
+  level: INFO          # DEBUG | INFO | WARNING | ERROR
+  file: /var/log/xui-limiter.log
+  max_size_mb: 50
+  backup_count: 3
